@@ -1,0 +1,52 @@
+[
+  {
+    "id": "REQ-1001",
+    "requestorName": "Girish",
+    "requestDate": "2025-08-25",
+    "notes": "Near plant, 10 km radius",
+    "beds": { "male": 6, "female": 2, "total": 8 },
+    "approvals": {
+      "bv": { "beds": 8, "date": "2025-08-26", "remarks": "OK" },
+      "sahi": { "beds": 8, "date": "2025-08-27", "remarks": "OK" },
+      "finhead": { "beds": 8, "date": "2025-08-28", "remarks": "OK" },
+      "vendor": { "beds": 8, "date": "2025-08-29", "name": "Vendor 1", "readyDate": "2025-09-03", "newProp": "no", "identifyDate": "", "tentativeMoveIn": "", "notes": "Immediate" }
+    },
+    "finance": { "amount": 60000, "terms": "Monthly, 2 months deposit", "paymentDate": "2025-08-31" },
+    "final": { "notifyDate": "2025-08-31", "vendorReadyDate": "2025-09-03", "notes": "Handover 2 PM" },
+    "history": []
+  },
+  {
+    "id": "REQ-1002",
+    "requestorName": "Olive",
+    "requestDate": "2025-09-01",
+    "notes": "Urgent",
+    "beds": { "male": 4, "female": 0, "total": 4 },
+    "approvals": {
+      "bv": { "beds": 4, "date": "2025-09-02", "remarks": "OK" },
+      "sahi": { "beds": 4, "date": "2025-09-03", "remarks": "OK" },
+      "finhead": { "beds": 4, "date": "2025-09-04", "remarks": "OK" },
+      "vendor": { "beds": 4, "date": "2025-09-05", "name": "Vendor 2", "readyDate": "2025-09-08", "newProp": "no", "identifyDate": "", "tentativeMoveIn": "", "notes": "" }
+    },
+    "finance": { "amount": 45000, "terms": "Monthly", "paymentDate": "2025-09-06" },
+    "final": { "notifyDate": "2025-09-06", "vendorReadyDate": "2025-09-08", "notes": "" },
+    "history": []
+  },
+  {
+    "id": "REQ-1003",
+    "requestorName": "Vara",
+    "requestDate": "2025-09-03",
+    "notes": "Standard",
+    "beds": { "male": 2, "female": 2, "total": 4 },
+    "approvals": {
+      "bv": { "beds": 4, "date": "2025-09-04", "remarks": "OK" },
+      "sahi": { "beds": 4, "date": "2025-09-05", "remarks": "OK" },
+      "finhead": { "beds": 4, "date": "2025-09-06", "remarks": "OK" },
+      "vendor": { "beds": 4, "date": "2025-09-06", "name": "Vendor 3", "readyDate": "2025-09-12", "newProp": "yes", "identifyDate": "2025-09-08", "tentativeMoveIn": "2025-09-12", "notes": "New property being identified" }
+    },
+    "finance": { "amount": 52000, "terms": "Monthly, 1 month deposit", "paymentDate": "2025-09-10" },
+    "final": { "notifyDate": "2025-09-10", "vendorReadyDate": "", "notes": "Waiting final ready" },
+    "history": []
+  }
+]
+
+
