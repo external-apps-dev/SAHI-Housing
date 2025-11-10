@@ -701,7 +701,7 @@
         <option value="all">All statuses</option>
         <option value="awaiting_approvals">Pending approvals</option>
         <option value="finance_pending">Finance pending</option>
-        <option value="payment_done">Payment done</option>
+  <option value="payment_done">Closure pending</option>
         <option value="movein_ready">Move-in ready</option>
         <option value="completed">Completed</option>
       </select>
@@ -1206,7 +1206,6 @@
     <footer>
       <div class="muted" id="drawerStatus">Status: Draft</div>
       <div style="display:flex; gap:10px;">
-        <button class="btn ghost" id="unlockBtn" title="Unlock fields for editing">Unlock (PIN)</button>
         <button class="btn ghost" id="deleteBtn">Delete</button>
         <button class="btn warn" id="saveBtn">Save</button>
         <button class="btn success" id="saveCloseBtn">Save & Close</button>
@@ -1377,6 +1376,7 @@
       editPinVerified: false,
   costPinVerified: false,
   vendorChecklistPinVerified: false,
+  pinCache: { create: false, bv: false, sahi: false, vendor: false, finHead: false },
   tempProofs: {},
   finPaymentProofs: {},
   finalRentalTerms: {}
@@ -2518,7 +2518,7 @@
       // stages: 1=request only, 2=BV, 3=SAHI, 4=Vendor, 5=Finance Paid, 6=Ready/Completed
       const samples = [
         mk(1, 12, { m: 10, f: 6 }, 6), // Completed
-        mk(2, 9,  { m: 8,  f: 4 }, 5), // Payment done
+  mk(2, 9,  { m: 8,  f: 4 }, 5), // Closure pending
         mk(3, 6,  { m: 6,  f: 2 }, 4), // Vendor approved
         mk(4, 4,  { m: 5,  f: 1 }, 3), // SAHI approved
         mk(5, 2,  { m: 4,  f: 0 }, 2), // BV approved
@@ -2541,22 +2541,34 @@
   // Closure override: if acknowledgement is given, treat as Completed immediately
   if (req.final?.readyAck) return { stage: 'Completed', next: null };
       for (const s of steps) {
+        if (s.key === 'vendor') {
+          const v = a.vendor || {};
+          const vendorComplete = !!v.date || (!!v.confirm && !!v.actualConfirmDate);
+          if (!vendorComplete) return { stage: 'Approvals', next: s.label };
+          continue;
+        }
         if (!a[s.key] || !a[s.key].date) return { stage: 'Approvals', next: s.label };
       }
       // Skip finance when vendor actuals are fully from existing capacity (no new onboarding)
       const vend = a.vendor || {};
       const noFinance = !!vend.confirm && (Number(vend.actualNewM||0) + Number(vend.actualNewF||0) === 0);
-  if (!req.finance || !req.finance.confirmDate) {
+      const finHeadDecision = (req?.finance?.head?.decision || '').toLowerCase();
+      const finHeadDone = !!req?.finance?.head?.date;
+      if (!req.finance || !req.finance.confirmDate) {
         if (noFinance) {
-          // Treat as payment done to allow closure
+          // Treat as closure pending to allow final acknowledgement
           // Closure can complete with Ready Acknowledgement (PIN) even if vendorReadyDate is not filled
-          if (!req.final || !req.final.readyAck) return { stage: 'Payment Done', next: 'Vendor Ready Confirmation' };
+          if (!req.final || !req.final.readyAck) return { stage: 'Closure Pending', next: 'Housing Partner Closure' };
           return { stage: 'Completed', next: null };
         }
-        return { stage: 'Finance Pending', next: 'Payment' };
+        if (finHeadDone && finHeadDecision === 'approve') {
+          if (!req.final || !req.final.readyAck) return { stage: 'Closure Pending', next: 'Housing Partner Closure' };
+          return { stage: 'Completed', next: null };
+        }
+        return { stage: 'Finance Pending', next: finHeadDone ? 'Payment Confirmation' : 'Finance Approval' };
       }
   // After finance confirmed, closure can complete once Ready Acknowledgement is ticked (PIN)
-  if (!req.final || !req.final.readyAck) return { stage: 'Payment Done', next: 'Vendor Ready Confirmation' };
+  if (!req.final || !req.final.readyAck) return { stage: 'Closure Pending', next: 'Housing Partner Closure' };
       return { stage: 'Completed', next: null };
     }
 
@@ -2565,7 +2577,8 @@
       if (req.requestDate) done++;
       if (req.approvals?.bv?.date) done++;
       if (req.approvals?.sahi?.date) done++;
-      if (req.approvals?.vendor?.date) done++;
+  const vendorApproved = !!(req.approvals?.vendor?.date) || (!!req.approvals?.vendor?.confirm && !!req.approvals?.vendor?.actualConfirmDate);
+  if (vendorApproved) done++;
   if (req.finance?.confirmDate) done++;
   // Treat as complete when closure acknowledgement is provided (vendorReadyDate optional)
   if (req.final?.readyAck) done = total;
@@ -2649,7 +2662,7 @@
     function computeStatusChip(req) {
       const { stage } = computeStage(req);
       if (stage === 'Completed') return { cls: 'ok', text: 'Completed' };
-      if (stage === 'Payment Done') return { cls: 'info', text: 'Payment Done' };
+  if (stage === 'Closure Pending') return { cls: 'info', text: 'Closure Pending' };
       if (stage === 'Finance Pending') return { cls: 'warn', text: 'Finance Pending' };
       if (stage === 'Approvals') {
         const np = nextPendingApproval(req);
@@ -2679,7 +2692,7 @@
           const lastDate = req.approvals?.vendor?.date || req.approvals?.sahi?.date || req.approvals?.bv?.date || req.requestDate;
           return daysBetween(lastDate, now) + 'd';
         }
-        case 'Payment Done': {
+        case 'Closure Pending': {
           const lastDate = req.finance?.confirmDate || req.approvals?.vendor?.date || req.requestDate;
           const target = req.approvals?.vendor?.readyDate || req.approvals?.vendor?.tentativeMoveIn || now;
           const d = daysBetween(lastDate, target);
@@ -2712,8 +2725,8 @@
       const n = parseInt(String(tatToNext(req)).replace(/\D/g,'')) || 0;
       if (st === 'Finance Pending' && n > settings.slaPayment) return 'overdue';
       if (st === 'Finance Pending' && n > Math.max(1, settings.slaPayment-1)) return 'soon';
-      if (st === 'Payment Done' && n > settings.slaReady) return 'overdue';
-      if (st === 'Payment Done' && n > Math.max(1, settings.slaReady-1)) return 'soon';
+  if (st === 'Closure Pending' && n > settings.slaReady) return 'overdue';
+  if (st === 'Closure Pending' && n > Math.max(1, settings.slaReady-1)) return 'soon';
       return '';
     }
 
@@ -2855,8 +2868,8 @@
         const stage = computeStage(r);
         if (f.status === 'awaiting_approvals' && stage.stage !== 'Approvals') return false;
         if (f.status === 'finance_pending' && stage.stage !== 'Finance Pending') return false;
-        if (f.status === 'payment_done' && stage.stage !== 'Payment Done') return false;
-        if (f.status === 'movein_ready' && stage.stage !== 'Payment Done' && stage.stage !== 'Completed') return false; // close enough
+  if (f.status === 'payment_done' && stage.stage !== 'Closure Pending') return false;
+  if (f.status === 'movein_ready' && stage.stage !== 'Closure Pending' && stage.stage !== 'Completed') return false; // close enough
         if (f.status === 'completed' && stage.stage !== 'Completed') return false;
         // Client
         if (f.client && f.client !== 'all') {
@@ -3116,9 +3129,16 @@
   renderProofsList();
 
   state.editPinVerified = false;
-      state.costPinVerified = false;
+  state.costPinVerified = false;
   state.vendorChecklistPinVerified = false;
-      lockRequestFormFields();
+  state.pinCache = { create: !req?.id, bv: false, sahi: false, vendor: false, finHead: false };
+  lockRequestFormFields();
+  bindLockedFieldHandlers();
+  if (!req?.id) {
+    unlockRequestFormFields();
+    state.editPinVerified = true;
+    state.costPinVerified = false;
+  }
       // Secure Per Bed Cost until PIN
       const costEl = qs('#vendorPerBedCost');
       if (costEl) {
@@ -3388,15 +3408,50 @@
         el.removeAttribute('disabled');
       });
       state.editPinVerified = true;
+      state.pinCache.create = true;
   // Also unlock per-bed cost when global Unlock is used
   unlockCostField();
     }
+    let requestLockHandlersBound = false;
+    function bindLockedFieldHandlers(){
+      if (requestLockHandlersBound) return;
+      const form = qs('#requestForm'); if (!form) return;
+      const activateControl = (el) => {
+        if (!el) return;
+        if (typeof el.click === 'function') {
+          try { el.click(); } catch (_) { /* no-op */ }
+        }
+        if (typeof el.focus === 'function') {
+          try { el.focus(); } catch (_) { /* no-op */ }
+        }
+        if (typeof el.select === 'function' && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')) {
+          try { el.select(); } catch (_) { /* no-op */ }
+        }
+      };
+      const maybeUnlock = async (target, evt) => {
+        if (!target) return;
+        const control = target.closest('[data-req-lock]');
+        if (!control || !control.disabled) return;
+        if (evt) { evt.preventDefault(); evt.stopPropagation(); }
+        const ok = await ensureEditPin();
+        if (!ok) return;
+        requestAnimationFrame(() => activateControl(control));
+      };
+      form.addEventListener('pointerdown', async (e) => { await maybeUnlock(e.target, e); }, true);
+      form.addEventListener('focusin', async (e) => { await maybeUnlock(e.target, e); }, true);
+      requestLockHandlersBound = true;
+    }
 
     async function ensureEditPin(){
-      if (state.editPinVerified) return true;
+      if (state.editPinVerified || state.pinCache.create) {
+        state.editPinVerified = true;
+        return true;
+      }
       const pin = (await askPin({ title:'Enter PIN', subtitle:'Unlock request fields' })) || '';
       if (pin !== CREATE_PIN) { alert('Incorrect PIN'); return false; }
+      state.pinCache.create = true;
       unlockRequestFormFields();
+      bindLockedFieldHandlers();
       return true;
     }
 
@@ -3409,17 +3464,25 @@
     }
 
     async function ensureCostPin(){
-      if (state.costPinVerified) return true;
+      if (state.costPinVerified || state.pinCache.vendor) {
+        state.costPinVerified = true;
+        return true;
+      }
       const pin = (await askPin({ title:'Enter PIN', subtitle:'Housing Partner PIN to view/update Per Bed Cost' })) || '';
       if (pin !== PIN_VENDOR) { alert('Incorrect PIN'); return false; }
+      state.pinCache.vendor = true;
       unlockCostField();
       return true;
     }
 
     async function ensureVendorChecklistPin(){
-      if (state.vendorChecklistPinVerified) return true;
+      if (state.vendorChecklistPinVerified || state.pinCache.vendor) {
+        state.vendorChecklistPinVerified = true;
+        return true;
+      }
       const pin = (await askPin({ title:'Enter PIN', subtitle:'Housing Partner PIN required to edit checklists' })) || '';
       if (pin !== PIN_VENDOR) { alert('Incorrect PIN'); return false; }
+      state.pinCache.vendor = true;
       state.vendorChecklistPinVerified = true;
       return true;
     }
@@ -3895,11 +3958,12 @@
       const setExclusive = (sel) => {
         group.forEach(el => { if (el !== sel) el.checked = false; });
       };
-      const onPick = async (el, label) => {
+      const onPick = async (el) => {
         if (!el.checked) return; // only react on checking
         // Ask PIN
         const pin = await askPin({ title: 'Enter PIN', subtitle: 'Finance Head authorization required', label: 'PIN' });
         if (pin !== PIN_FIN_HEAD) { alert('Incorrect PIN'); el.checked = false; return; }
+        state.pinCache.finHead = true;
         setExclusive(el);
         if (dateEl) dateEl.value = nowLocalDatetimeValue();
         // Reflect lock state whenever a decision is made
@@ -4105,7 +4169,28 @@
     async function ensurePinsForChanges(existing, next){
       if (!existing) return; // new draft
       const need = new Set();
-      const changed = (a,b) => a !== b;
+      const trim = (v) => String(v ?? '').trim();
+      const num = (v) => {
+        const n = Number(v ?? 0);
+        return Number.isFinite(n) ? n : 0;
+      };
+      const sameStr = (a, b) => trim(a) === trim(b);
+      const sameNum = (a, b) => num(a) === num(b);
+      const sameDateTime = (a, b) => {
+        if (!a && !b) return true;
+        const ta = Date.parse(a);
+        const tb = Date.parse(b);
+        if (!Number.isNaN(ta) && !Number.isNaN(tb)) return ta === tb;
+        return sameStr(a, b);
+      };
+      const normalizeWeekly = (arr = []) => {
+        const out = [];
+        for (let i = 0; i < 4; i++) {
+          const row = arr[i] || {};
+          out.push({ male: num(row.male), female: num(row.female) });
+        }
+        return out;
+      };
       const jstr = (x) => JSON.stringify(x ?? null);
       const objChanged = (a,b, keys) => keys.some(k => jstr(a?.[k]) !== jstr(b?.[k]));
       const vendorPropChanged = () => {
@@ -4121,11 +4206,18 @@
       };
       const sahiApproved = !!next?.approvals?.sahi?.date;
       // Request-level changes => Creator PIN
-      if (changed(existing.requestDate, next.requestDate) || changed(existing.notes, next.notes) || changed(existing.clientName, next.clientName) || changed(existing.requestorName, next.requestorName) || jstr(existing.bedsWeekly) !== jstr(next.bedsWeekly)) {
-        need.add('create');
-      }
-  // Requestor per-bed charges change => Creator PIN
-      if (objChanged(existing?.associateCharges, next?.associateCharges, ['assocDeduction','processingFee','waterElec'])) need.add('create');
+      const requestFieldsChanged = (() => {
+        if (!sameDateTime(existing?.requestDate, next?.requestDate)) return true;
+        if (!sameStr(existing?.notes, next?.notes)) return true;
+        if (!sameStr(existing?.clientName, next?.clientName)) return true;
+        if (!sameStr(existing?.requestorName, next?.requestorName)) return true;
+        if (JSON.stringify(normalizeWeekly(existing?.bedsWeekly)) !== JSON.stringify(normalizeWeekly(next?.bedsWeekly))) return true;
+        return false;
+      })();
+      if (requestFieldsChanged) need.add('create');
+      // Requestor per-bed charges change => Creator PIN
+      const chargesChanged = ['assocDeduction','processingFee','waterElec'].some(k => !sameNum(existing?.associateCharges?.[k], next?.associateCharges?.[k]));
+      if (chargesChanged) need.add('create');
       // BV section
       if (objChanged(existing?.approvals?.bv, next?.approvals?.bv, ['male','female','date','remarks'])) need.add('bv');
       // SAHI section
@@ -4170,23 +4262,56 @@
       // Prompt per role (once each)
       for (const role of need) {
         if (role === 'create') {
-          const pin = (await askPin({ title:'Enter PIN', subtitle:'Edit previously saved Request fields' })) || '';
-          if (pin !== CREATE_PIN) throw new Error('Incorrect PIN for Request edits.');
-        } else if (role === 'bv') {
-          const pin = (await askPin({ title:'Enter PIN', subtitle:'BV Head edits require BV PIN' })) || '';
-          if (pin !== PIN_BV) throw new Error('Incorrect PIN for BV section edits.');
-        } else if (role === 'sahi') {
-          const pin = (await askPin({ title:'Enter PIN', subtitle:'SAHI Head edits require SAHI PIN' })) || '';
-          if (pin !== PIN_SAHI) throw new Error('Incorrect PIN for SAHI section edits.');
-        } else if (role === 'vendor') {
-          const pin = (await askPin({ title:'Enter PIN', subtitle:'Housing Partner edits require Vendor PIN' })) || '';
-          if (pin !== PIN_VENDOR) throw new Error('Incorrect PIN for Vendor section edits.');
-        } else if (role === 'finhead') {
-          const pin = (await askPin({ title:'Enter PIN', subtitle:'Finance Head edits require Finance Head PIN' })) || '';
-          if (pin !== PIN_FIN_HEAD) throw new Error('Incorrect PIN for Finance Head decision edits.');
-        } else if (role === 'finOrVendor') {
-          const pin = (await askPin({ title:'Enter PIN', subtitle:'Finance fields can be saved with Finance Head or Housing Partner PIN' })) || '';
-          if (pin !== PIN_FIN_HEAD && pin !== PIN_VENDOR) throw new Error('Incorrect PIN (need Finance Head 7281 or Housing Partner 7280).');
+          if (!state.pinCache.create) {
+            const pin = (await askPin({ title:'Enter PIN', subtitle:'Edit previously saved Request fields' })) || '';
+            if (pin !== CREATE_PIN) throw new Error('Incorrect PIN for Request edits.');
+            state.pinCache.create = true;
+          }
+          continue;
+        }
+        if (role === 'bv') {
+          if (!state.pinCache.bv) {
+            const pin = (await askPin({ title:'Enter PIN', subtitle:'BV Head edits require BV PIN' })) || '';
+            if (pin !== PIN_BV) throw new Error('Incorrect PIN for BV section edits.');
+            state.pinCache.bv = true;
+          }
+          continue;
+        }
+        if (role === 'sahi') {
+          if (!state.pinCache.sahi) {
+            const pin = (await askPin({ title:'Enter PIN', subtitle:'SAHI Head edits require SAHI PIN' })) || '';
+            if (pin !== PIN_SAHI) throw new Error('Incorrect PIN for SAHI section edits.');
+            state.pinCache.sahi = true;
+          }
+          continue;
+        }
+        if (role === 'vendor') {
+          if (!state.pinCache.vendor) {
+            const pin = (await askPin({ title:'Enter PIN', subtitle:'Housing Partner edits require Vendor PIN' })) || '';
+            if (pin !== PIN_VENDOR) throw new Error('Incorrect PIN for Vendor section edits.');
+            state.pinCache.vendor = true;
+          }
+          continue;
+        }
+        if (role === 'finhead') {
+          if (!state.pinCache.finHead) {
+            const pin = (await askPin({ title:'Enter PIN', subtitle:'Finance Head edits require Finance Head PIN' })) || '';
+            if (pin !== PIN_FIN_HEAD) throw new Error('Incorrect PIN for Finance Head decision edits.');
+            state.pinCache.finHead = true;
+          }
+          continue;
+        }
+        if (role === 'finOrVendor') {
+          if (!state.pinCache.finHead && !state.pinCache.vendor) {
+            const pin = (await askPin({ title:'Enter PIN', subtitle:'Finance fields can be saved with Finance Head or Housing Partner PIN' })) || '';
+            if (pin === PIN_FIN_HEAD) {
+              state.pinCache.finHead = true;
+            } else if (pin === PIN_VENDOR) {
+              state.pinCache.vendor = true;
+            } else {
+              throw new Error('Incorrect PIN (need Finance Head 7281 or Housing Partner 7280).');
+            }
+          }
         }
       }
     }
@@ -4217,22 +4342,31 @@
         if (!r.approvals?.sahi) r.approvals.sahi = { male: 0, female: 0, date: '', remarks: '' };
         if (!r.approvals?.vendor) r.approvals.vendor = { male: 0, female: 0, date: '', name: '', readyDate: '', newProp: 'no', identifyDate: '', tentativeMoveIn: '', notes: '' };
         if (!r.approvals.bv.date) {
-          const pin = (await askPin({ title:'Enter PIN', subtitle:'BV Head Approval' })) || '';
-          if (pin !== PIN_BV) { alert('Incorrect PIN'); return; }
+            if (!state.pinCache.bv) {
+              const pin = (await askPin({ title:'Enter PIN', subtitle:'BV Head Approval' })) || '';
+              if (pin !== PIN_BV) { alert('Incorrect PIN'); return; }
+              state.pinCache.bv = true;
+            }
           // mirror requested beds into BV approval
           const bm = Number(r?.beds?.male||0), bf = Number(r?.beds?.female||0);
           r.approvals.bv.male = bm; r.approvals.bv.female = bf;
           r.approvals.bv.date = now;
         } else if (!r.approvals.sahi.date) {
-          const pin = (await askPin({ title:'Enter PIN', subtitle:'SAHI Head Approval' })) || '';
-          if (pin !== PIN_SAHI) { alert('Incorrect PIN'); return; }
+          if (!state.pinCache.sahi) {
+            const pin = (await askPin({ title:'Enter PIN', subtitle:'SAHI Head Approval' })) || '';
+            if (pin !== PIN_SAHI) { alert('Incorrect PIN'); return; }
+            state.pinCache.sahi = true;
+          }
           // mirror BV approval into SAHI approval
           const bm = Number(r?.approvals?.bv?.male||0), bf = Number(r?.approvals?.bv?.female||0);
           r.approvals.sahi.male = bm; r.approvals.sahi.female = bf;
           r.approvals.sahi.date = now;
         } else if (!r.approvals.vendor.date) {
-          const pin = (await askPin({ title:'Enter PIN', subtitle:'Housing Partner Approval' })) || '';
-          if (pin !== PIN_VENDOR) { alert('Incorrect PIN'); return; }
+          if (!state.pinCache.vendor) {
+            const pin = (await askPin({ title:'Enter PIN', subtitle:'Housing Partner Approval' })) || '';
+            if (pin !== PIN_VENDOR) { alert('Incorrect PIN'); return; }
+            state.pinCache.vendor = true;
+          }
           // mirror SAHI approval into Vendor approval
           const sm = Number(r?.approvals?.sahi?.male||0), sf = Number(r?.approvals?.sahi?.female||0);
           r.approvals.vendor.male = sm; r.approvals.vendor.female = sf;
@@ -4240,13 +4374,19 @@
         }
       } else if (st.stage === 'Finance Pending') {
         // Finance stage is controlled via Finance Head decision + confirm date; no auto-set of payment timestamp
-        const pin = (await askPin({ title:'Enter PIN', subtitle:'Finance Head authorization' })) || '';
-        if (pin !== PIN_FIN_HEAD) { alert('Incorrect PIN'); return; }
+        if (!state.pinCache.finHead) {
+          const pin = (await askPin({ title:'Enter PIN', subtitle:'Finance Head authorization' })) || '';
+          if (pin !== PIN_FIN_HEAD) { alert('Incorrect PIN'); return; }
+          state.pinCache.finHead = true;
+        }
   r.finance.confirmDate = r.finance.confirmDate || todayISO();
-      } else if (st.stage === 'Payment Done') {
+      } else if (st.stage === 'Closure Pending') {
         // Require Vendor PIN to mark vendor ready
-        const pin = (await askPin({ title:'Enter PIN', subtitle:'Housing Partner confirmation' })) || '';
-        if (pin !== PIN_VENDOR) { alert('Incorrect PIN'); return; }
+        if (!state.pinCache.vendor) {
+          const pin = (await askPin({ title:'Enter PIN', subtitle:'Housing Partner confirmation' })) || '';
+          if (pin !== PIN_VENDOR) { alert('Incorrect PIN'); return; }
+          state.pinCache.vendor = true;
+        }
         // Persist as date-only to align with UI (no time). Vendor ready date optional for closure.
         r.final.vendorReadyDate = r.final.vendorReadyDate || r.approvals.vendor.readyDate || todayISO();
         r.final.readyAck = true;
@@ -4344,8 +4484,7 @@
       qs('#closeDrawerBtn').addEventListener('click', closeDrawer);
   qs('#saveBtn').addEventListener('click', async () => { await onSave(false); });
   qs('#saveCloseBtn').addEventListener('click', async () => { await onSave(true); });
-      qs('#deleteBtn').addEventListener('click', onDelete);
-      qs('#unlockBtn').addEventListener('click', async () => { await ensureEditPin(); });
+  qs('#deleteBtn').addEventListener('click', onDelete);
       qs('#duplicateBtn').addEventListener('click', async () => {
         const pin = (await askPin({ title:'Enter PIN', subtitle:'Duplicate request' })) || '';
         if (pin !== CREATE_PIN) { alert('Incorrect PIN'); return; }
@@ -4739,6 +4878,7 @@
           if (el?.checked) {
             const pin = (await askPin({ title:'Enter PIN', subtitle:'Housing Partner Acknowledge' })) || '';
             if (pin !== PIN_VENDOR) { alert('Incorrect PIN'); el.checked = false; return; }
+            state.pinCache.vendor = true;
             if (dt && !dt.value) dt.value = nowLocalDatetimeValue();
           } else { if (dt) dt.value = ''; }
         }
@@ -4747,6 +4887,7 @@
           if (el?.checked) {
             const pin = (await askPin({ title:'Enter PIN', subtitle:'Housing Partner Confirmation' })) || '';
             if (pin !== PIN_VENDOR) { alert('Incorrect PIN'); el.checked = false; return; }
+            state.pinCache.vendor = true;
             if (dt && !dt.value) dt.value = nowLocalDatetimeValue();
             // Show Finance Head controls only after confirmed
             const fh = qs('#financeHeadControls'); if (fh) fh.style.display = '';
@@ -4774,6 +4915,7 @@
           if (el?.checked) {
             const pin = (await askPin({ title:'Enter PIN', subtitle:'BV Head Approval' })) || '';
             if (pin !== PIN_BV) { alert('Incorrect PIN'); el.checked = false; return; }
+            state.pinCache.bv = true;
             if (dt && !dt.value) dt.value = nowLocalDatetimeValue();
             // lock BV inputs after approval
             qs('#apprBVM')?.setAttribute('disabled','');
@@ -4793,6 +4935,7 @@
           if (el?.checked) {
             const pin = (await askPin({ title:'Enter PIN', subtitle:'SAHI Head Approval' })) || '';
             if (pin !== PIN_SAHI) { alert('Incorrect PIN'); el.checked = false; return; }
+            state.pinCache.sahi = true;
             if (dt && !dt.value) dt.value = nowLocalDatetimeValue();
             // lock SAHI inputs after approval
             qs('#apprSAHIM')?.setAttribute('disabled','');
@@ -4811,6 +4954,7 @@
           if (el?.checked) {
             const pin = (await askPin({ title:'Enter PIN', subtitle:'Housing Partner confirmation' })) || '';
             if (pin !== PIN_VENDOR) { alert('Incorrect PIN'); el.checked = false; return; }
+            state.pinCache.vendor = true;
             if (dt && !dt.value) dt.value = nowLocalDatetimeValue();
             const vrd = qs('#finalVendorReadyDate'); if (vrd && !vrd.value) vrd.value = nowLocalDateValue();
             // Ensure closure unlocks immediately after acknowledgement
@@ -5251,7 +5395,11 @@
         const main = document.querySelector('.drawer main');
         if (main) main.prepend(banner); else document.body.appendChild(banner);
       }
-      banner.textContent = msg; banner.classList.add('show');
+      const text = String(msg ?? '');
+      banner.textContent = text; banner.classList.add('show');
+      if (text.trim()) {
+        try { alert(text); } catch (_){ /* ignore alert errors */ }
+      }
       setTimeout(()=> banner.classList.remove('show'), 4500);
     }
 
