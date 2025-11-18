@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="196" height="91" viewBox="0 0 196 91" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="SAHI by LabourNet">
+  <title>SAHI by LabourNet</title>
+  <desc>Brand mark for SAHI by LabourNet</desc>
+  <rect width="196" height="91" fill="none"/>
+  <g>
+    <!-- Stylized S -->
+    <path d="M32 62c0-7 6-11 16-14 7-2 10-4 10-7 0-4-4-6-10-6-6 0-12 2-17 6l-7-12c7-6 18-10 29-10 18 0 29 8 29 21 0 9-6 15-19 19-8 2-11 4-11 7h30v14H31c-1-2-2-4-2-8z" fill="#10133A"/>
+    <!-- V-like orange accent (interpreting the provided raster) -->
+    <path d="M84 18l12 26 12-26h15l-20 44h-14L69 18h15z" fill="#E56344"/>
+    <!-- H and I -->
+    <path d="M130 18h16v20h18V18h16v58h-16V52h-18v24h-16V18z" fill="#10133A"/>
+  </g>
+  <!-- by LabourNet -->
+  <g transform="translate(0,74)">
+    <text x="98" y="12" text-anchor="middle" font-family="Inter, Segoe UI, Arial, Helvetica, sans-serif" font-size="14" fill="#E56344">by LabourNet</text>
+  </g>
+</svg>
